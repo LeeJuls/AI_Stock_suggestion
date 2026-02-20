@@ -55,9 +55,10 @@ def get_stock_data(ticker, interval):
     except Exception:
         return None
 
-# 6. 분석 실행 함수 (콜백에서 호출)
+# 6. 버튼 클릭 콜백: 플래그 + 쿨타임을 여기서 1회만 설정
 def start_analysis():
     st.session_state.is_running = True
+    tracker["last_run_time"] = time.time()  # ★ 콜백에서 1회만 실행
 
 # 7. 웹 UI 구성
 st.title("📈 AI 단타 분석기 (V3.2)")
@@ -70,64 +71,62 @@ current_time = time.time()
 elapsed = current_time - tracker["last_run_time"]
 remaining = int(COOLDOWN_LIMIT - elapsed)
 
-if remaining > 0:
-    # 쿨타임 중: 버튼 비활성화
+if remaining > 0 and not st.session_state.is_running:
+    # 쿨타임 중 (분석 진행 중이 아닌 경우): 버튼 비활성화
     st.button("제미니 AI 분석 시작", disabled=True, key="wait_btn")
     st.info(f"⏳ 글로벌 쿨타임 중입니다. **약 {remaining}초** 후 페이지를 새로고침해주세요.")
 
 elif st.session_state.is_running:
-    # ★ 분석 진행 중: 버튼 비활성화 + 스피너 표시
+    # 분석 진행 중: 버튼 비활성화 + 실제 분석 수행
     st.button("분석 엔진 가동 중...", disabled=True, key="running_btn")
     
-    tracker["last_run_time"] = time.time()
-    
-    with st.spinner(f"[{ticker}] 상세 지표 및 거래량 분석 중..."):
-        d1 = get_stock_data(ticker, "1m")
-        
-        if d1 is None:
-            st.error(f"'{ticker}'의 데이터를 가져올 수 없습니다. 티커가 유효한지, 장 중인지 확인해주세요.")
-            st.session_state.is_running = False
-            st.stop()
-        
-        d5 = get_stock_data(ticker, "5m")
-        d30 = get_stock_data(ticker, "30m")
-        
-        if d5 is None:
-            st.error(f"'{ticker}'의 5분봉 데이터를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.")
-            st.session_state.is_running = False
-            st.stop()
-        
-        # 30분봉 null 안전 처리
-        if d30 is not None:
-            line_30m = f"[30분봉] 가격: {d30['Close']:.2f}, 거래량: {d30['Volume']:,.0f}, 20이평: {d30['SMA_20']:.2f}"
-        else:
-            line_30m = "[30분봉] 데이터 없음 (장 시작 직후이거나 데이터 부족)"
-        
-        prompt = f"""
-        너는 미국 주식 전문 트레이더야. [{ticker}]의 데이터를 보고 일 3% 수익 목표 단타 전략을 세워줘.
-        
-        [1분봉] 가격: {d1['Close']:.2f}, 거래량: {d1['Volume']:,.0f}, 5이평: {d1['SMA_5']:.2f}, 20이평: {d1['SMA_20']:.2f}, 스토캐스틱K: {d1['Stoch_K']:.2f}
-        [5분봉] 가격: {d5['Close']:.2f}, 거래량: {d5['Volume']:,.0f}, CCI: {d5['CCI']:.2f}
-        {line_30m}
-        
-        분석 요구사항:
-        1. 거래량 추이: 현재 변동성이 유의미한 거래량을 동반한 진짜 움직임인지 분석해줘.
-        2. 전략 제안: 구체적인 진입가, 목표가(3% 수익), 손절가를 제안해줘.
-        """
-        
-        try:
+    # ★ try/finally로 어떤 에러가 나도 is_running은 반드시 해제
+    try:
+        with st.spinner(f"[{ticker}] 상세 지표 및 거래량 분석 중..."):
+            d1 = get_stock_data(ticker, "1m")
+            
+            if d1 is None:
+                st.error(f"'{ticker}'의 데이터를 가져올 수 없습니다. 티커가 유효한지, 장 중인지 확인해주세요.")
+                st.stop()
+            
+            d5 = get_stock_data(ticker, "5m")
+            d30 = get_stock_data(ticker, "30m")
+            
+            if d5 is None:
+                st.error(f"'{ticker}'의 5분봉 데이터를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.")
+                st.stop()
+            
+            # 30분봉 null 안전 처리
+            if d30 is not None:
+                line_30m = f"[30분봉] 가격: {d30['Close']:.2f}, 거래량: {d30['Volume']:,.0f}, 20이평: {d30['SMA_20']:.2f}"
+            else:
+                line_30m = "[30분봉] 데이터 없음 (장 시작 직후이거나 데이터 부족)"
+            
+            prompt = f"""
+            너는 미국 주식 전문 트레이더야. [{ticker}]의 데이터를 보고 일 3% 수익 목표 단타 전략을 세워줘.
+            
+            [1분봉] 가격: {d1['Close']:.2f}, 거래량: {d1['Volume']:,.0f}, 5이평: {d1['SMA_5']:.2f}, 20이평: {d1['SMA_20']:.2f}, 스토캐스틱K: {d1['Stoch_K']:.2f}
+            [5분봉] 가격: {d5['Close']:.2f}, 거래량: {d5['Volume']:,.0f}, CCI: {d5['CCI']:.2f}
+            {line_30m}
+            
+            분석 요구사항:
+            1. 거래량 추이: 현재 변동성이 유의미한 거래량을 동반한 진짜 움직임인지 분석해줘.
+            2. 전략 제안: 구체적인 진입가, 목표가(3% 수익), 손절가를 제안해줘.
+            """
+            
             response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
             st.session_state.analysis_result = response.text
             st.session_state.last_ticker = ticker
-        except Exception as e:
-            st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
-        
-        # 분석 완료 → 플래그 해제 후 rerun
+            
+    except Exception as e:
+        st.error(f"분석 중 오류가 발생했습니다: {e}")
+    finally:
+        # ★ 성공이든 실패든 반드시 플래그 해제 후 rerun
         st.session_state.is_running = False
         st.rerun()
 
 else:
-    # ★ 대기 상태: on_click 콜백으로 클릭 즉시 is_running=True → rerun 시 버튼 비활성화
+    # 대기 상태: 클릭 시 콜백으로 is_running + 쿨타임 1회 설정
     st.button("제미니 AI 분석 시작", key="start_btn", on_click=start_analysis)
 
 # 세션에 저장된 분석 결과가 있으면 항상 표시
