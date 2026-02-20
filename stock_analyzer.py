@@ -29,6 +29,8 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "used_model" not in st.session_state:
     st.session_state.used_model = ""
+if "volume_unavailable" not in st.session_state:
+    st.session_state.volume_unavailable = False
 
 # 4. API 키 및 클라이언트 설정
 try:
@@ -83,6 +85,8 @@ with result_area:
 
     if st.session_state.analysis_result:
         st.divider()
+        if st.session_state.volume_unavailable:
+            st.warning("📌 프리마켓/애프터마켓 시간대로 거래량 데이터가 제공되지 않습니다. 가격 기반 분석만 수행되었습니다.")
         st.success(f"[{st.session_state.last_ticker}] 분석 결과 — 엔진: {st.session_state.used_model}")
         st.markdown(st.session_state.analysis_result)
 
@@ -128,12 +132,21 @@ with button_area:
             else:
                 line_30m = "[30분봉] 데이터 없음 (장 시작 직후이거나 데이터 부족)"
 
+            # ★ 거래량 0 감지 → 프리마켓/애프터마켓 안내
+            vol_warning = ""
+            if d1['Volume'] == 0 or d5['Volume'] == 0:
+                vol_warning = "\n※ 현재 프리마켓/애프터마켓 시간대로 거래량 데이터가 제공되지 않습니다. 거래량 분석은 제외하고 가격 기반으로만 전략을 세워줘."
+                st.session_state.volume_unavailable = True
+            else:
+                st.session_state.volume_unavailable = False
+
             prompt = f"""
             너는 미국 주식 전문 트레이더야. [{ticker}]의 데이터를 보고 일 3% 수익 목표 단타 전략을 세워줘.
 
             [1분봉] 가격: {d1['Close']:.2f}, 거래량: {d1['Volume']:,.0f}, 5이평: {d1['SMA_5']:.2f}, 20이평: {d1['SMA_20']:.2f}, 스토캐스틱K: {d1['Stoch_K']:.2f}
             [5분봉] 가격: {d5['Close']:.2f}, 거래량: {d5['Volume']:,.0f}, CCI: {d5['CCI']:.2f}
             {line_30m}
+            {vol_warning}
 
             분석 요구사항:
             1. 거래량 추이: 현재 변동성이 유의미한 거래량을 동반한 진짜 움직임인지 분석해줘.
