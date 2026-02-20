@@ -27,6 +27,8 @@ if "error_message" not in st.session_state:
     st.session_state.error_message = None
 if "history" not in st.session_state:
     st.session_state.history = []
+if "used_model" not in st.session_state:
+    st.session_state.used_model = ""
 
 # 4. API 키 및 클라이언트 설정
 try:
@@ -65,7 +67,7 @@ def start_analysis():
     st.session_state.error_message = None
 
 # 7. 웹 UI 구성
-st.title("📈 AI 단타 분석기 (V1.0)")
+st.title("📈 AI 단타 분석기 (V1.1)")
 st.write("실시간 지표와 거래량을 분석하여 정밀한 매매 전략을 도출합니다.")
 
 ticker = st.text_input("분석할 미장 티커(Ticker)를 입력하세요", value="SOXL").upper()
@@ -81,7 +83,7 @@ with result_area:
 
     if st.session_state.analysis_result:
         st.divider()
-        st.success(f"[{st.session_state.last_ticker}] 분석 결과")
+        st.success(f"[{st.session_state.last_ticker}] 분석 결과 — 엔진: {st.session_state.used_model}")
         st.markdown(st.session_state.analysis_result)
 
     # ★ 히스토리 목록 (최근 10개)
@@ -89,7 +91,7 @@ with result_area:
         st.divider()
         with st.expander(f"📋 이전 분석 기록 ({len(st.session_state.history) - 1}건)", expanded=False):
             for i, item in enumerate(st.session_state.history[1:], 1):
-                with st.expander(f"[{item['time']}] {item['ticker']}", expanded=False):
+                with st.expander(f"[{item['time']}] {item['ticker']} ({item.get('model', '')})", expanded=False):
                     st.markdown(item['result'])
 
     st.caption("※ 이 분석은 투자 참고용이며, 모든 투자의 책임은 투자자 본인에게 있습니다.")
@@ -139,27 +141,41 @@ with button_area:
             """
 
             try:
+                # ★ 모델 폴백: Pro → Flash → 소진 메시지
+                MODELS = [
+                    ("gemini-2.5-pro", "Pro"),
+                    ("gemini-2.5-flash", "Flash"),
+                ]
                 response = None
-                for attempt in range(3):
+                used_model = ""
+                
+                for model_id, model_label in MODELS:
                     try:
-                        response = client.models.generate_content(model='gemini-2.5-flash-lite', contents=prompt)
-                        break
-                    except Exception as api_err:
-                        err_str = str(api_err)
-                        # 일일 한도 초과 → 재시도 의미 없음
-                        if "PerDay" in err_str or "daily" in err_str.lower():
-                            raise api_err
-                        # 분당 제한(429) 또는 서버 과부하(503) → 15초 대기 후 재시도
-                        if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-                                or "503" in err_str or "UNAVAILABLE" in err_str):
-                            if attempt < 2:
-                                time.sleep(15)
-                                continue
-                        raise api_err
-
+                        # 분당 제한(429) / 서버 과부하(503) 대비 최대 2회 재시도
+                        for attempt in range(2):
+                            try:
+                                response = client.models.generate_content(model=model_id, contents=prompt)
+                                used_model = model_label
+                                break
+                            except Exception as api_err:
+                                err_str = str(api_err)
+                                if "PerDay" in err_str or "daily" in err_str.lower():
+                                    raise api_err  # 일일 소진 → 다음 모델로
+                                if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                                        or "503" in err_str or "UNAVAILABLE" in err_str):
+                                    if attempt < 1:
+                                        time.sleep(15)
+                                        continue
+                                raise api_err
+                        if response:
+                            break  # 성공 시 모델 루프 탈출
+                    except Exception:
+                        continue  # 이 모델 실패 → 다음 모델 시도
+                
                 if response:
                     st.session_state.analysis_result = response.text
                     st.session_state.last_ticker = ticker
+                    st.session_state.used_model = used_model
                     tracker["last_run_time"] = time.time()
                     # ★ 히스토리 저장 (최대 10개, 오래된 것 자동 삭제)
                     from datetime import datetime
@@ -167,11 +183,12 @@ with button_area:
                         "ticker": ticker,
                         "result": response.text,
                         "time": datetime.now().strftime("%H:%M:%S"),
+                        "model": used_model,
                     })
                     if len(st.session_state.history) > 10:
                         st.session_state.history.pop()
                 else:
-                    st.session_state.error_message = "⏳ API 요청이 반복 실패했습니다. 잠시 후 다시 시도해주세요."
+                    st.session_state.error_message = "🚫 금일 무료 토큰이 모두 소진되었습니다. 내일 접속하세요."
 
             except Exception as e:
                 err_str = str(e)
