@@ -25,6 +25,8 @@ if "is_running" not in st.session_state:
     st.session_state.is_running = False
 if "error_message" not in st.session_state:
     st.session_state.error_message = None
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 # 4. API 키 및 클라이언트 설정
 try:
@@ -63,7 +65,7 @@ def start_analysis():
     st.session_state.error_message = None
 
 # 7. 웹 UI 구성
-st.title("📈 AI 단타 분석기 (V3.4)")
+st.title("📈 AI 단타 분석기 (V1.0)")
 st.write("실시간 지표와 거래량을 분석하여 정밀한 매매 전략을 도출합니다.")
 
 ticker = st.text_input("분석할 미장 티커(Ticker)를 입력하세요", value="SOXL").upper()
@@ -81,6 +83,14 @@ with result_area:
         st.divider()
         st.success(f"[{st.session_state.last_ticker}] 분석 결과")
         st.markdown(st.session_state.analysis_result)
+
+    # ★ 히스토리 목록 (최근 10개)
+    if len(st.session_state.history) > 1:
+        st.divider()
+        with st.expander(f"📋 이전 분석 기록 ({len(st.session_state.history) - 1}건)", expanded=False):
+            for i, item in enumerate(st.session_state.history[1:], 1):
+                with st.expander(f"[{item['time']}] {item['ticker']}", expanded=False):
+                    st.markdown(item['result'])
 
     st.caption("※ 이 분석은 투자 참고용이며, 모든 투자의 책임은 투자자 본인에게 있습니다.")
 
@@ -151,6 +161,15 @@ with button_area:
                     st.session_state.analysis_result = response.text
                     st.session_state.last_ticker = ticker
                     tracker["last_run_time"] = time.time()
+                    # ★ 히스토리 저장 (최대 10개, 오래된 것 자동 삭제)
+                    from datetime import datetime
+                    st.session_state.history.insert(0, {
+                        "ticker": ticker,
+                        "result": response.text,
+                        "time": datetime.now().strftime("%H:%M:%S"),
+                    })
+                    if len(st.session_state.history) > 10:
+                        st.session_state.history.pop()
                 else:
                     st.session_state.error_message = "⏳ API 요청이 반복 실패했습니다. 잠시 후 다시 시도해주세요."
 
