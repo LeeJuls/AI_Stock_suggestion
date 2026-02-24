@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 from google import genai
+from datetime import datetime, timezone, timedelta
 import time
 
 # streamlit run stock_analyzer.py 실행 명령어
@@ -13,7 +14,7 @@ st.set_page_config(page_title="AI 단타 분석기", page_icon="📈", layout="c
 # 2. 전역 쿨타임 관리 (모든 사용자가 서버 자원을 공유)
 @st.cache_resource
 def get_global_tracker():
-    return {"last_run_time": 0}
+    return {"last_run_time": 0, "pro_exhausted": False, "flash_exhausted": False}
 
 tracker = get_global_tracker()
 COOLDOWN_LIMIT = 10 
@@ -33,6 +34,20 @@ if "used_model" not in st.session_state:
     st.session_state.used_model = ""
 if "volume_unavailable" not in st.session_state:
     st.session_state.volume_unavailable = False
+if "market_closed" not in st.session_state:
+    st.session_state.market_closed = False
+
+# 장 상태 판단 함수 (EST 기준)
+def is_market_open():
+    est = timezone(timedelta(hours=-5))
+    now = datetime.now(est)
+    # 주말 체크 (토=5, 일=6)
+    if now.weekday() >= 5:
+        return False
+    # 정규장: 09:30 ~ 16:00 EST
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now <= market_close
 
 # 4. API 키 및 클라이언트 설정
 try:
@@ -61,6 +76,9 @@ def get_stock_data(ticker, interval):
         stoch = ta.stoch(df['High'], df['Low'], df['Close'])
         if stoch is not None:
             df['Stoch_K'] = stoch.iloc[:, 0]
+        # ★ 마지막 봉이 미완성(거래량0)이고 직전 봉에 거래량이 있으면 → 완성된 봉 사용
+        if df['Volume'].iloc[-1] == 0 and len(df) >= 2 and df['Volume'].iloc[-2] > 0:
+            return df.iloc[-2]
         return df.iloc[-1]
     except Exception:
         return None
@@ -71,7 +89,7 @@ def start_analysis():
     st.session_state.error_message = None
 
 # 7. 웹 UI 구성
-st.title("📈 AI 단타 분석기 (V1.1)")
+st.title("📈 AI 단타 분석기 (V1.2)")
 st.write("실시간 지표와 거래량을 분석하여 정밀한 매매 전략을 도출합니다.")
 
 ticker = st.text_input("분석할 미장 티커(Ticker)를 입력하세요", value="SOXL").upper()
@@ -87,6 +105,8 @@ with result_area:
 
     if st.session_state.analysis_result:
         st.divider()
+        if st.session_state.market_closed:
+            st.info("📢 현재 장이 마감된 상태입니다. 마감 전 마지막 데이터로 분석되었습니다.")
         if st.session_state.volume_unavailable:
             st.warning("📌 프리마켓/애프터마켓 시간대로 거래량 데이터가 제공되지 않습니다. 가격 기반 분석만 수행되었습니다.")
         st.success(f"[{st.session_state.last_ticker}] 분석 결과 — 엔진: {st.session_state.used_model}")
@@ -142,6 +162,9 @@ with button_area:
             else:
                 st.session_state.volume_unavailable = False
 
+            # ★ 장 마감 상태 체크
+            st.session_state.market_closed = not is_market_open()
+
             prompt = f"""
             너는 미국 주식 전문 트레이더야. [{ticker}]의 데이터를 보고 일 3% 수익 목표 단타 전략을 세워줘.
 
@@ -156,15 +179,21 @@ with button_area:
             """
 
             try:
-                # ★ 모델 폴백: Pro → Flash → 소진 메시지
+                # ★ 모델 폴백: Pro → Flash → Flash-Lite → 소진 메시지
+                # 소진된 모델은 전역 플래그로 건너뜀 (불필요한 API 호출 0)
                 MODELS = [
-                    ("gemini-2.5-pro", "Pro"),
-                    ("gemini-2.5-flash", "Flash"),
+                    ("gemini-2.5-pro",        "Pro",        "pro_exhausted"),
+                    ("gemini-2.5-flash",       "Flash",      "flash_exhausted"),
+                    ("gemini-2.5-flash-lite",  "Flash-Lite", None),
                 ]
                 response = None
                 used_model = ""
                 
-                for model_id, model_label in MODELS:
+                for model_id, model_label, exhausted_key in MODELS:
+                    # 이미 소진된 모델이면 스킵
+                    if exhausted_key and tracker.get(exhausted_key):
+                        continue
+
                     try:
                         # 분당 제한(429) / 서버 과부하(503) 대비 최대 2회 재시도
                         for attempt in range(2):
@@ -175,6 +204,8 @@ with button_area:
                             except Exception as api_err:
                                 err_str = str(api_err)
                                 if "PerDay" in err_str or "daily" in err_str.lower():
+                                    if exhausted_key:
+                                        tracker[exhausted_key] = True  # ★ 전역 소진 플래그 저장
                                     raise api_err  # 일일 소진 → 다음 모델로
                                 if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str
                                         or "503" in err_str or "UNAVAILABLE" in err_str):
