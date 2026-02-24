@@ -59,6 +59,9 @@ def get_stock_data(ticker, interval):
         stoch = ta.stoch(df['High'], df['Low'], df['Close'])
         if stoch is not None:
             df['Stoch_K'] = stoch.iloc[:, 0]
+        # ★ 마지막 봉이 미완성(거래량0)이고 직전 봉에 거래량이 있으면 → 완성된 봉 사용
+        if df['Volume'].iloc[-1] == 0 and len(df) >= 2 and df['Volume'].iloc[-2] > 0:
+            return df.iloc[-2]
         return df.iloc[-1]
     except Exception:
         return None
