@@ -12,7 +12,7 @@ st.set_page_config(page_title="AI 단타 분석기", page_icon="📈", layout="c
 # 2. 전역 쿨타임 관리 (모든 사용자가 서버 자원을 공유)
 @st.cache_resource
 def get_global_tracker():
-    return {"last_run_time": 0}
+    return {"last_run_time": 0, "pro_exhausted": False}
 
 tracker = get_global_tracker()
 COOLDOWN_LIMIT = 10 
@@ -178,6 +178,7 @@ with button_area:
 
             try:
                 # ★ 모델 폴백: Pro → Flash → 소진 메시지
+                # Pro가 이미 소진된 경우 바로 Flash로 건너뜀 (불필요한 API 호출 0)
                 MODELS = [
                     ("gemini-2.5-pro", "Pro"),
                     ("gemini-2.5-flash", "Flash"),
@@ -186,6 +187,10 @@ with button_area:
                 used_model = ""
                 
                 for model_id, model_label in MODELS:
+                    # ★ Pro가 전역적으로 소진된 상태면 스킵
+                    if model_label == "Pro" and tracker["pro_exhausted"]:
+                        continue
+
                     try:
                         # 분당 제한(429) / 서버 과부하(503) 대비 최대 2회 재시도
                         for attempt in range(2):
@@ -196,6 +201,8 @@ with button_area:
                             except Exception as api_err:
                                 err_str = str(api_err)
                                 if "PerDay" in err_str or "daily" in err_str.lower():
+                                    if model_label == "Pro":
+                                        tracker["pro_exhausted"] = True  # ★ 전역 플래그 저장
                                     raise api_err  # 일일 소진 → 다음 모델로
                                 if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str
                                         or "503" in err_str or "UNAVAILABLE" in err_str):
