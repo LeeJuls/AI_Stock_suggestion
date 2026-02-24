@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 from google import genai
+from datetime import datetime, timezone, timedelta
 import time
 
 # 1. 페이지 설정
@@ -31,6 +32,20 @@ if "used_model" not in st.session_state:
     st.session_state.used_model = ""
 if "volume_unavailable" not in st.session_state:
     st.session_state.volume_unavailable = False
+if "market_closed" not in st.session_state:
+    st.session_state.market_closed = False
+
+# 장 상태 판단 함수 (EST 기준)
+def is_market_open():
+    est = timezone(timedelta(hours=-5))
+    now = datetime.now(est)
+    # 주말 체크 (토=5, 일=6)
+    if now.weekday() >= 5:
+        return False
+    # 정규장: 09:30 ~ 16:00 EST
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now <= market_close
 
 # 4. API 키 및 클라이언트 설정
 try:
@@ -88,6 +103,8 @@ with result_area:
 
     if st.session_state.analysis_result:
         st.divider()
+        if st.session_state.market_closed:
+            st.info("📢 현재 장이 마감된 상태입니다. 마감 전 마지막 데이터로 분석되었습니다.")
         if st.session_state.volume_unavailable:
             st.warning("📌 프리마켓/애프터마켓 시간대로 거래량 데이터가 제공되지 않습니다. 가격 기반 분석만 수행되었습니다.")
         st.success(f"[{st.session_state.last_ticker}] 분석 결과 — 엔진: {st.session_state.used_model}")
@@ -142,6 +159,9 @@ with button_area:
                 st.session_state.volume_unavailable = True
             else:
                 st.session_state.volume_unavailable = False
+
+            # ★ 장 마감 상태 체크
+            st.session_state.market_closed = not is_market_open()
 
             prompt = f"""
             너는 미국 주식 전문 트레이더야. [{ticker}]의 데이터를 보고 일 3% 수익 목표 단타 전략을 세워줘.
