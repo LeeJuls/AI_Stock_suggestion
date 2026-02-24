@@ -5,6 +5,8 @@ import pandas_ta as ta
 from google import genai
 import time
 
+# streamlit run stock_analyzer.py 실행 명령어
+
 # 1. 페이지 설정
 st.set_page_config(page_title="AI 단타 분석기", page_icon="📈", layout="centered")
 
