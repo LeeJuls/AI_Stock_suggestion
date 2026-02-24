@@ -12,7 +12,7 @@ st.set_page_config(page_title="AI 단타 분석기", page_icon="📈", layout="c
 # 2. 전역 쿨타임 관리 (모든 사용자가 서버 자원을 공유)
 @st.cache_resource
 def get_global_tracker():
-    return {"last_run_time": 0, "pro_exhausted": False}
+    return {"last_run_time": 0, "pro_exhausted": False, "flash_exhausted": False}
 
 tracker = get_global_tracker()
 COOLDOWN_LIMIT = 10 
@@ -87,7 +87,7 @@ def start_analysis():
     st.session_state.error_message = None
 
 # 7. 웹 UI 구성
-st.title("📈 AI 단타 분석기 (V1.1)")
+st.title("📈 AI 단타 분석기 (V1.2)")
 st.write("실시간 지표와 거래량을 분석하여 정밀한 매매 전략을 도출합니다.")
 
 ticker = st.text_input("분석할 미장 티커(Ticker)를 입력하세요", value="SOXL").upper()
@@ -177,18 +177,19 @@ with button_area:
             """
 
             try:
-                # ★ 모델 폴백: Pro → Flash → 소진 메시지
-                # Pro가 이미 소진된 경우 바로 Flash로 건너뜀 (불필요한 API 호출 0)
+                # ★ 모델 폴백: Pro → Flash → Flash-Lite → 소진 메시지
+                # 소진된 모델은 전역 플래그로 건너뜀 (불필요한 API 호출 0)
                 MODELS = [
-                    ("gemini-2.5-pro", "Pro"),
-                    ("gemini-2.5-flash", "Flash"),
+                    ("gemini-2.5-pro",        "Pro",        "pro_exhausted"),
+                    ("gemini-2.5-flash",       "Flash",      "flash_exhausted"),
+                    ("gemini-2.5-flash-lite",  "Flash-Lite", None),
                 ]
                 response = None
                 used_model = ""
                 
-                for model_id, model_label in MODELS:
-                    # ★ Pro가 전역적으로 소진된 상태면 스킵
-                    if model_label == "Pro" and tracker["pro_exhausted"]:
+                for model_id, model_label, exhausted_key in MODELS:
+                    # 이미 소진된 모델이면 스킵
+                    if exhausted_key and tracker.get(exhausted_key):
                         continue
 
                     try:
@@ -201,8 +202,8 @@ with button_area:
                             except Exception as api_err:
                                 err_str = str(api_err)
                                 if "PerDay" in err_str or "daily" in err_str.lower():
-                                    if model_label == "Pro":
-                                        tracker["pro_exhausted"] = True  # ★ 전역 플래그 저장
+                                    if exhausted_key:
+                                        tracker[exhausted_key] = True  # ★ 전역 소진 플래그 저장
                                     raise api_err  # 일일 소진 → 다음 모델로
                                 if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str
                                         or "503" in err_str or "UNAVAILABLE" in err_str):
